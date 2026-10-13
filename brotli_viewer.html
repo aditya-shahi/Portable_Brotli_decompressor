@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brotli S3 Viewer</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f27; --muted: #667085; --line: #dfe3ea;
+    --accent: #2f5fd7; --accent-ink: #ffffff; --err: #b42318; --err-bg: #fef3f2; --ok: #067647;
+    --code-bg: #fbfbfc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1a1e26; --ink: #e8ebf1; --muted: #98a2b3; --line: #2b313c;
+      --accent: #6d95ff; --accent-ink: #0b1020; --err: #fda29b; --err-bg: #2a1614; --ok: #75e0a7;
+      --code-bg: #15181f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text] { flex: 1 1 360px; min-width: 0; padding: 10px 12px; border-radius: 8px;
+         border: 1px solid var(--line); background: var(--code-bg); color: var(--ink);
+         font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+  button, .btn { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line);
+         background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  .extracted { margin-top: 12px; font-size: 12.5px; color: var(--muted); word-break: break-all; }
+  .extracted code { color: var(--ink); }
+  #status { margin-top: 12px; min-height: 22px; font-size: 14px; color: var(--muted); }
+  #status.ok { color: var(--ok); }
+  #error { display: none; margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--err-bg);
+           color: var(--err); font-size: 14px; }
+  #error p { margin: 0 0 8px; } #error p:last-child { margin: 0; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 20px 0 8px; }
+  .toolbar .grow { flex: 1; color: var(--muted); font-size: 13px; }
+  #outWrap { display: none; }
+  pre { margin: 0; padding: 14px; background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+        max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+  .drop { margin-top: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 8px;
+          color: var(--muted); font-size: 13px; }
+  .drop.over { border-color: var(--accent); color: var(--ink); }
+  input[type=file] { display: none; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .auth { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .auth .hd { font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+  .auth .hd .saved { font-weight: 400; color: var(--ok); font-size: 12.5px; }
+  .auth input[type=text], .auth input[type=password] { flex: 1 1 180px; min-width: 0; padding: 9px 12px; border-radius: 8px;
+         border: 1px solid var(--line); background: var(--code-bg); color: var(--ink); font: 13px system-ui, sans-serif; }
+  .auth input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+  .auth.need input { border-color: var(--err); }
+  .small { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Brotli S3 Viewer</h1>
+  <p class="sub">Paste a decom URL. Everything after <code>s3link=</code> is fetched, Brotli-decompressed, and shown below.</p>
+
+  <div class="card">
+    <label for="url">URL</label>
+    <div class="row">
+      <input id="url" type="text" spellcheck="false" autocomplete="off"
+             placeholder="http://forage-internal.datables.ai/.../decom?s3link=https://bucket.s3.amazonaws.com/key.json.br">
+      <button id="go" class="primary">Decompress</button>
+    </div>
+    <div class="extracted" id="extracted"></div>
+
+    <div class="auth" id="auth">
+      <div class="hd">Login <span class="saved" id="savedTag"></span></div>
+      <div class="row">
+        <input id="user" type="text" placeholder="Username" autocomplete="username" spellcheck="false">
+        <input id="pass" type="password" placeholder="Password" autocomplete="current-password">
+        <button id="forget" type="button">Forget login</button>
+      </div>
+      <label class="toggle small" style="margin-top:8px"><input type="checkbox" id="remember" checked> Remember on this device after a successful login</label>
+      <div class="small">Only needed when the link asks for a username and password. Saved per host in this browser's local storage and sent only to that host.</div>
+    </div>
+
+    <div id="status" role="status" aria-live="polite"></div>
+    <div id="error" role="alert"></div>
+
+    <div class="drop" id="drop">
+      If the browser can't fetch the link (S3 CORS), download the <code>.br</code> file and
+      <label class="btn" for="file" style="display:inline-block;margin:0 4px;padding:4px 10px;font-weight:400">choose it</label>
+      or drop it here. It is decompressed locally.
+      <input id="file" type="file">
+    </div>
+  </div>
+
+  <div id="outWrap">
+    <div class="toolbar">
+      <span class="grow" id="meta"></span>
+      <label class="toggle"><input type="checkbox" id="pretty" checked> Pretty-print JSON</label>
+      <button id="copy">Copy</button>
+      <button id="download">Download</button>
+      <button id="newtab">Open in new tab</button>
+    </div>
+    <pre id="out"></pre>
+  </div>
+</main>
+
+<script type="module">
+const BROTLI_URL = "https://cdn.jsdelivr.net/npm/brotli-wasm@3.0.1/index.web.js";
+
+const $ = (id) => document.getElementById(id);
+const urlInput = $("url"), goBtn = $("go"), statusEl = $("status"), errEl = $("error");
+const outWrap = $("outWrap"), outEl = $("out"), metaEl = $("meta"), prettyEl = $("pretty");
+const extractedEl = $("extracted");
+
+// When served by brotli_local.py on localhost, fetching happens there (no CORS limits).
+const PROXY = location.protocol.startsWith("http") && ["localhost", "127.0.0.1"].includes(location.hostname);
+let rawText = "";       // decompressed text, exactly as received
+let outName = "output.txt";
+let brotliPromise = null;
+
+// ---- saved logins (per host, in localStorage) ----
+const STORE_KEY = "brotliViewerLogins";
+const authBox = $("auth"), userEl = $("user"), passEl = $("pass"), rememberEl = $("remember"), savedTag = $("savedTag");
+
+function loadLogins() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (_) { return {}; } }
+function saveLogins(m) { try { localStorage.setItem(STORE_KEY, JSON.stringify(m)); return true; } catch (_) { return false; } }
+function hostOf(link) { try { return new URL(link).host; } catch (_) { return ""; } }
+
+function fillSavedLogin() {
+  const link = extractS3Link(urlInput.value);
+  const host = link ? hostOf(link) : "";
+  const saved = host ? loadLogins()[host] : null;
+  if (saved) { userEl.value = saved.u; passEl.value = saved.p; savedTag.textContent = "✓ saved for " + host; }
+  else { savedTag.textContent = ""; }
+}
+
+function basicHeader(u, p) {
+  return "Basic " + btoa(unescape(encodeURIComponent(u + ":" + p)));
+}
+
+$("forget").addEventListener("click", () => {
+  const link = extractS3Link(urlInput.value); const host = link ? hostOf(link) : "";
+  const m = loadLogins();
+  if (host) delete m[host]; else for (const k in m) delete m[k];
+  saveLogins(m);
+  userEl.value = ""; passEl.value = ""; savedTag.textContent = "Login forgotten";
+});
+
+function loadBrotli() {
+  if (!brotliPromise) brotliPromise = import(BROTLI_URL).then((m) => m.default);
+  return brotliPromise;
+}
+
+// Everything after the first "s3link=", per the request. If it was percent-encoded, decode it.
+function extractS3Link(input) {
+  const s = input.trim();
+  const i = s.indexOf("s3link=");
+  if (i === -1) return null;
+  let link = s.slice(i + "s3link=".length).trim();
+  if (/^https?%3A/i.test(link)) { try { link = decodeURIComponent(link); } catch (_) {} }
+  return link || null;
+}
+
+function nameFromLink(link) {
+  try {
+    const p = new URL(link).pathname.split("/").filter(Boolean).pop() || "output";
+    const n = decodeURIComponent(p);
+    return n.toLowerCase().endsWith(".br") && n.length > 3 ? n.slice(0, -3) : n;
+  } catch (_) { return "output.txt"; }
+}
+
+const fmtBytes = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB";
+
+function setStatus(msg, ok = false) { statusEl.textContent = msg; statusEl.className = ok ? "ok" : ""; }
+function showError(parts) {
+  errEl.innerHTML = "";
+  for (const t of parts) { const p = document.createElement("p"); p.textContent = t; errEl.appendChild(p); }
+  errEl.style.display = "block";
+}
+function clearError() { errEl.style.display = "none"; errEl.innerHTML = ""; }
+
+function looksLikeText(bytes) {
+  try { new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, 4096)); return true; }
+  catch (_) { return false; }
+}
+
+async function decode(bytes) {
+  const brotli = await loadBrotli();
+  try {
+    const out = brotli.decompress(bytes);
+    return { text: new TextDecoder("utf-8").decode(out), size: out.length, note: "" };
+  } catch (e) {
+    // The server may have sent Content-Encoding: br, in which case the browser already decoded it.
+    if (looksLikeText(bytes)) {
+      return { text: new TextDecoder("utf-8").decode(bytes), size: bytes.length,
+               note: " (data was already decoded by the browser)" };
+    }
+    throw new Error("The data is not valid Brotli.");
+  }
+}
+
+function render() {
+  let shown = rawText;
+  if (prettyEl.checked) {
+    try { shown = JSON.stringify(JSON.parse(rawText), null, 2); } catch (_) {}
+  }
+  outEl.textContent = shown;
+}
+
+function showResult(res, name, compressedSize) {
+  rawText = res.text; outName = name;
+  render();
+  outWrap.style.display = "block";
+  metaEl.textContent = `${name} · ${fmtBytes(compressedSize)} compressed → ${fmtBytes(res.size)}${res.note}`;
+  setStatus("Done.", true);
+}
+
+async function run() {
+  clearError(); outWrap.style.display = "none";
+  const link = extractS3Link(urlInput.value);
+  if (!link) {
+    extractedEl.textContent = "";
+    showError(["No s3link= found in that URL. Paste the full URL including s3link=…"]);
+    return;
+  }
+  extractedEl.innerHTML = "";
+  extractedEl.append("Extracted: ");
+  const code = document.createElement("code"); code.textContent = link; extractedEl.appendChild(code);
+
+  goBtn.disabled = true;
+  try {
+    setStatus("Fetching…");
+    authBox.classList.remove("need");
+    const haveLogin = userEl.value !== "" || passEl.value !== "";
+    const opts = { cache: "no-store" };
+    if (haveLogin) opts.headers = { Authorization: basicHeader(userEl.value, passEl.value) };
+    let resp;
+    try {
+      resp = PROXY
+        ? await fetch("/api/fetch", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: link, user: userEl.value, pass: passEl.value }) })
+        : await fetch(link, opts);
+    } catch (e) {
+      throw Object.assign(new Error("fetch-blocked"), { blocked: true, usedLogin: haveLogin });
+    }
+    if (resp.status === 401) {
+      authBox.classList.add("need"); userEl.focus();
+      throw new Error(haveLogin
+        ? "That username or password was rejected (HTTP 401). Check them and try again."
+        : "This link needs a login (HTTP 401). Enter the username and password above, then click Decompress.");
+    }
+    if (haveLogin && resp.ok && rememberEl.checked) {
+      const m = loadLogins(); m[hostOf(link)] = { u: userEl.value, p: passEl.value };
+      if (saveLogins(m)) savedTag.textContent = "✓ saved for " + hostOf(link);
+    }
+    if (PROXY && !resp.ok) {
+      let msg = `The download failed with HTTP ${resp.status}.`;
+      try { msg = (await resp.json()).error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    if (!resp.ok) {
+      const hint = resp.status === 403 ? " The presigned link may have expired, or the object isn't public." : "";
+      throw new Error(`The download failed with HTTP ${resp.status}.${hint}`);
+    }
+    if (PROXY) {
+      const text = await resp.text();   // already decompressed by the local helper
+      const csize = parseInt(resp.headers.get("X-Compressed-Size") || "0", 10);
+      showResult({ text, size: new TextEncoder().encode(text).length, note: "" }, nameFromLink(link), csize);
+      return;
+    }
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    setStatus("Decompressing…");
+    const res = await decode(bytes);
+    showResult(res, nameFromLink(link), bytes.length);
+  } catch (e) {
+    setStatus("");
+    if (e.blocked) {
+      authBox.classList.add("need");
+      showError([
+        e.usedLogin
+          ? "The request was blocked even with a login. The server probably doesn't allow requests from this page (CORS), so it can't be fetched here."
+          : "The browser couldn't fetch that link. If it asks for a username and password, enter them in the Login box and try again. Otherwise the server isn't allowing requests from this page (CORS).",
+        "Fallback: open the extracted link in a new tab, log in, save the file, then choose it below (or drop it on the box). It is decompressed locally.",
+      ]);
+    } else {
+      showError([e.message || String(e)]);
+    }
+  } finally { goBtn.disabled = false; }
+}
+
+async function runFile(file) {
+  clearError(); outWrap.style.display = "none"; goBtn.disabled = true;
+  try {
+    setStatus("Decompressing…");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const res = await decode(bytes);
+    const name = file.name.toLowerCase().endsWith(".br") && file.name.length > 3 ? file.name.slice(0, -3) : file.name;
+    showResult(res, name, bytes.length);
+  } catch (e) { setStatus(""); showError([e.message || String(e)]); }
+  finally { goBtn.disabled = false; }
+}
+
+goBtn.addEventListener("click", run);
+urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+prettyEl.addEventListener("change", render);
+urlInput.addEventListener("input", fillSavedLogin);
+urlInput.addEventListener("change", fillSavedLogin);
+[userEl, passEl].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); }));
+
+$("file").addEventListener("change", (e) => { if (e.target.files[0]) runFile(e.target.files[0]); });
+const drop = $("drop");
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) runFile(f); });
+
+$("copy").addEventListener("click", async (e) => {
+  try { await navigator.clipboard.writeText(outEl.textContent); e.target.textContent = "Copied"; }
+  catch (_) { e.target.textContent = "Copy failed"; }
+  setTimeout(() => (e.target.textContent = "Copy"), 1500);
+});
+// JSON is shown as a JSON document (the browser displays it inline, no download); anything else as plain text.
+function blobUrl() {
+  const text = outEl.textContent;
+  let type = "text/plain;charset=utf-8";
+  try { JSON.parse(text); type = "application/json;charset=utf-8"; } catch (_) {}
+  return URL.createObjectURL(new Blob([text], { type }));
+}
+$("download").addEventListener("click", () => {
+  const a = document.createElement("a"); a.href = blobUrl(); a.download = outName; a.click();
+});
+$("newtab").addEventListener("click", () => {
+  const url = blobUrl();
+  if (!window.open(url, "_blank")) setStatus("Your browser blocked the new tab. Allow pop-ups for this page and try again.");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+});
+
+// Optional: open as page.html?url=<full url> to run immediately.
+const preset = new URLSearchParams(location.search).get("url");
+if (preset) { urlInput.value = preset; fillSavedLogin(); run(); }
+
+loadBrotli().catch(() => {}); // warm up the decoder
+</script>
+</body>
+</html>
